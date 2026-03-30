@@ -5,26 +5,30 @@
 #include "cJSON.h"
 #include "esp_log.h"
 
+const char *const kSen55Entities[kSen55EntityCount] = {
+    "pm1_0", "pm2_5", "pm4_0", "pm10",
+    "temp", "humidity", "voc", "nox",
+};
+
 namespace {
 
 const char *TAG = "ha_disc";
 
-struct SensorDef {
-    const char *entity;        // suffix for topic + unique_id
+struct SensorMeta {
     const char *name;          // human-readable
     const char *device_class;  // HA device_class (nullptr if none)
     const char *unit;          // unit_of_measurement (nullptr if none)
 };
 
-constexpr SensorDef kSen55Sensors[] = {
-    {"pm1_0",    "PM1.0",       "pm1",         "µg/m³"},
-    {"pm2_5",    "PM2.5",       "pm25",        "µg/m³"},
-    {"pm4_0",    "PM4.0",       nullptr,       "µg/m³"},
-    {"pm10",     "PM10",        "pm10",        "µg/m³"},
-    {"temp",     "Temperature", "temperature", "°C"},
-    {"humidity", "Humidity",    "humidity",    "%"},
-    {"voc",      "VOC Index",   "volatile_organic_compounds_part", nullptr},
-    {"nox",      "NOx Index",   nullptr,       nullptr},
+constexpr SensorMeta kSen55Meta[kSen55EntityCount] = {
+    {"PM1.0",       "pm1",         "µg/m³"},
+    {"PM2.5",       "pm25",        "µg/m³"},
+    {"PM4.0",       nullptr,       "µg/m³"},
+    {"PM10",        "pm10",        "µg/m³"},
+    {"Temperature", "temperature", "°C"},
+    {"Humidity",    "humidity",    "%"},
+    {"VOC Index",   "volatile_organic_compounds_part", nullptr},
+    {"NOx Index",   nullptr,       nullptr},
 };
 
 cJSON *make_device_block(const char *device_id)
@@ -44,33 +48,35 @@ cJSON *make_device_block(const char *device_id)
     return dev;
 }
 
-void publish_sensor_config(const char *device_id, const SensorDef &s)
+void publish_sensor_config(const char *device_id, size_t index)
 {
-    // Discovery topic: homeassistant/sensor/<device_id>/<entity>/config
+    const char *entity = kSen55Entities[index];
+    const auto &meta = kSen55Meta[index];
+
     char topic[128];
     std::snprintf(topic, sizeof(topic),
-                  "homeassistant/sensor/%s/%s/config", device_id, s.entity);
+                  "homeassistant/sensor/%s/%s/config", device_id, entity);
 
     cJSON *root = cJSON_CreateObject();
 
-    cJSON_AddStringToObject(root, "name", s.name);
+    cJSON_AddStringToObject(root, "name", meta.name);
 
     char unique_id[64];
     std::snprintf(unique_id, sizeof(unique_id),
-                  "sensor_%s_%s", device_id, s.entity);
+                  "sensor_%s_%s", device_id, entity);
     cJSON_AddStringToObject(root, "unique_id", unique_id);
     cJSON_AddStringToObject(root, "object_id", unique_id);
 
     char state_topic[64];
     std::snprintf(state_topic, sizeof(state_topic),
-                  "aqm/%s/sensor/%s", device_id, s.entity);
+                  "aqm/%s/sensor/%s", device_id, entity);
     cJSON_AddStringToObject(root, "state_topic", state_topic);
 
-    if (s.device_class) {
-        cJSON_AddStringToObject(root, "device_class", s.device_class);
+    if (meta.device_class) {
+        cJSON_AddStringToObject(root, "device_class", meta.device_class);
     }
-    if (s.unit) {
-        cJSON_AddStringToObject(root, "unit_of_measurement", s.unit);
+    if (meta.unit) {
+        cJSON_AddStringToObject(root, "unit_of_measurement", meta.unit);
     }
 
     cJSON_AddStringToObject(root, "state_class", "measurement");
@@ -94,7 +100,7 @@ void publish_sensor_config(const char *device_id, const SensorDef &s)
 
 void ha_discovery_publish_sen55(const char *device_id)
 {
-    for (const auto &s : kSen55Sensors) {
-        publish_sensor_config(device_id, s);
+    for (size_t i = 0; i < kSen55EntityCount; ++i) {
+        publish_sensor_config(device_id, i);
     }
 }

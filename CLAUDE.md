@@ -1,30 +1,37 @@
-# CYD Air Quality Monitor
+# T-Display S3 Air Quality Monitor
 
-ESP-IDF firmware for an air quality monitor using an ESP32-8048S043 "CYD" and Sensirion SEN55 sensor.
+ESP-IDF firmware for an air quality monitor using a LilyGo T-Display S3 and Sensirion SEN55 sensor.
 
 ## Hardware
 
 | Component | Detail |
 |-----------|--------|
-| Board | ESP32-8048S043 (ESP32-S3, 16MB flash, 8MB octal PSRAM) |
-| Display | 4.3" 800x480 RGB565, ST7262, 18 MHz pixel clock |
-| Sensor | Sensirion SEN55, I2C @ 0x69, GPIO 11 (SDA) / 12 (SCL) via P2 header |
-| Sensor power | 5V from P1 5V pin, GND from P1 GND, SEL pin pulled to GND for I2C mode |
-| USB | USB-A to USB-C cable required (board's CC resistors don't support C-to-C) |
+| Board | LilyGo T-Display S3 (ESP32-S3, 16MB flash, 8MB OPI PSRAM) |
+| Display | 1.9" 320x170 (landscape) ST7789V, i80 8-bit parallel interface |
+| Sensor | Sensirion SEN55, I2C @ 0x69, GPIO 17 (SDA) / 18 (SCL) |
+| Sensor power | 5V from pin header, GND, SEL pin pulled to GND for I2C mode |
+| USB | Built-in ESP32-S3 USB — standard USB-C cable works |
 
-### Header pinout
+### Display interface (Intel 8080 parallel)
 
-| Header | Pins |
+The ST7789V is driven via an 8-bit i80 bus. Data is written to the controller's internal RAM; it handles screen refresh independently.
+
+| Signal | GPIO |
 |--------|------|
-| P1 | GND, RXD (GPIO 44), TXD (GPIO 43), 5V |
-| P2 | GPIO 19, 11, 12, 13 |
-| P4 | GPIO 18, 17, 3.3V, GND |
+| D0–D7 | 39, 40, 41, 42, 45, 46, 47, 48 |
+| WR | 8 |
+| DC | 7 |
+| CS | 6 |
+| RST | 5 |
+| Backlight | 38 |
+| Peripheral power | 15 (must be HIGH before display init) |
 
 ### I2C notes
 
 - SEN55 has no internal pull-ups; ESP32-S3 internal pull-ups (~45 kΩ) are enabled and work at 10 kHz
 - Sensirion I2C protocol requires a 20 ms delay between command write and data read (no repeated-start)
 - SEN55 I2C is 3.3V compatible despite 5V VDD
+- GPIO 17/18 chosen to avoid conflict with UART0 (GPIO 43/44), which remains free as a backup debug path
 
 ## Build
 
@@ -32,37 +39,33 @@ Requires ESP-IDF v6.0 at `~/.espressif/v6.0/esp-idf`. A wrapper at `~/.local/bin
 
 ```sh
 idf.py build
-idf.py -p <PORT> flash monitor
+idf.py -p /dev/cu.usbmodem* flash monitor
 ```
 
-**Flashing**: The CH340C on the USB-C port is wired to UART0 (confirmed). USB-A to USB-C cable required (board lacks CC resistors for C-to-C). See `debugging.md` for current flashing issues.
+**Serial**: Uses the ESP32-S3's built-in USB peripheral (`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`). No external UART chip.
 
 ## Architecture
 
 ```
 main/
-  main.cpp                – app_main: display + sensor + WiFi + MQTT + SEN55 publishing
-  esp32_8048s043.hpp/cpp  – Board-specific RGB LCD + LVGL port init
-  ui.hpp/cpp              – Ui class: 8 measurement cards, status line
-  sen55.hpp/cpp           – Sen55 class: self-managing sensor (pimpl, owns polling task)
-  device_id.hpp/cpp       – MAC-derived unique device ID
-  wifi.hpp/cpp            – WiFi STA with auto-reconnect
-  mqtt.hpp/cpp            – esp-mqtt client, LWT, publish/subscribe
-  ha_discovery.hpp/cpp    – HA MQTT Discovery payloads for SEN55 (8 entities)
-  credentials.h.template  – WiFi SSID/pass, MQTT broker URI (copy to credentials.h)
+  main.cpp              – app_main: display + sensor + WiFi + MQTT + SEN55 publishing
+  tdisplay_s3.hpp/cpp   – Board-specific ST7789V i80 LCD + LVGL port init (landscape)
+  ui.hpp/cpp            – Ui class: PM2.5 display with severity-colored background
+  sen55.hpp/cpp         – Sen55 class: self-managing sensor (pimpl, owns polling task)
+  device_id.hpp/cpp     – MAC-derived unique device ID
+  wifi.hpp/cpp          – WiFi STA with auto-reconnect
+  mqtt.hpp/cpp          – esp-mqtt client, LWT, publish/subscribe
+  ha_discovery.hpp/cpp  – HA MQTT Discovery payloads for SEN55 (8 entities)
+  credentials.h.template – WiFi SSID/pass, MQTT broker URI (copy to credentials.h)
 ```
 
 ### Sensor
 
 Sen55 is a self-managing domain object. Construction starts measurement and spawns a polling task; destruction stops it. The only interface is a callback that fires with each new `Measurement`. All I2C protocol details are hidden behind pimpl. The header has no ESP-IDF dependencies.
 
-### Display (esp32_8048s043)
+### Display (tdisplay_s3)
 
-Board-specific init for the ESP32-8048S043's 4.3" ST7262 RGB panel. Uses `esp_lvgl_port` with a simple single-framebuffer configuration (no bounce buffer, no direct mode, no avoid-tearing).
-
-### LVGL fonts
-
-Built-in Montserrat fonts lack µ (U+00B5) and ³ (U+00B3). Unit strings use ASCII fallbacks: `ug/m3` instead of `µg/m³`. The degree symbol (U+00B0) is included and works.
+Board-specific init for the T-Display S3's ST7789V panel via i80 interface. Configures the 8-bit parallel bus, creates the panel driver, rotates to landscape (swap_xy + mirror), and registers with `esp_lvgl_port`. Uses DMA-backed double buffers in internal SRAM.
 
 ### Dependencies (managed via idf_component.yml)
 
