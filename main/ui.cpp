@@ -15,10 +15,10 @@ static void SetLabel(lv_obj_t* label, const char* fmt, float val)
 static constexpr size_t kSeverityCount = 4;
 
 static const lv_color_t kSeverityColors[kSeverityCount] = {
-    lv_color_hex(0x2E7D32),  // good — green
-    lv_color_hex(0xF9A825),  // moderate — amber
-    lv_color_hex(0xE65100),  // unhealthy for sensitive groups — orange
-    lv_color_hex(0xC62828),  // unhealthy — red
+    lv_color_hex(0x47A33F),  // good — spring green (hue ~115°)
+    lv_color_hex(0xB0A341),  // moderate — goldenrod (hue ~53°)
+    lv_color_hex(0xD4693B),  // unhealthy for sensitive groups — burnt sienna (hue ~18°)
+    lv_color_hex(0xE0263C),  // unhealthy — crimson (hue ~353°)
 };
 
 static size_t Pm25Severity(float v)
