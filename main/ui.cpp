@@ -14,6 +14,13 @@ static void SetLabel(lv_obj_t* label, const char* fmt, float val)
 
 static constexpr size_t kSeverityCount = 4;
 
+static const lv_color_t kSeverityColors[kSeverityCount] = {
+    lv_color_hex(0x2E7D32),  // good — green
+    lv_color_hex(0xF9A825),  // moderate — amber
+    lv_color_hex(0xE65100),  // unhealthy for sensitive groups — orange
+    lv_color_hex(0xC62828),  // unhealthy — red
+};
+
 static size_t Pm25Severity(float v)
 {
     if (v <= 12.f)  return 0;
@@ -22,58 +29,108 @@ static size_t Pm25Severity(float v)
     return 3;
 }
 
-static const lv_color_t kSeverityColors[kSeverityCount] = {
-    lv_color_hex(0x2E7D32),  // good — green
-    lv_color_hex(0xF9A825),  // moderate — amber
-    lv_color_hex(0xE65100),  // unhealthy for sensitive groups — orange
-    lv_color_hex(0xC62828),  // unhealthy — red
-};
+static size_t Pm1Severity(float v)
+{
+    if (v <= 12.f)  return 0;
+    if (v <= 35.f)  return 1;
+    if (v <= 55.f)  return 2;
+    return 3;
+}
+
+static size_t Pm4Severity(float v)
+{
+    if (v <= 25.f)  return 0;
+    if (v <= 50.f)  return 1;
+    if (v <= 75.f)  return 2;
+    return 3;
+}
+
+static size_t Pm10Severity(float v)
+{
+    if (v <= 54.f)  return 0;
+    if (v <= 154.f) return 1;
+    if (v <= 254.f) return 2;
+    return 3;
+}
+
+// Comfort range — centered thresholds
+static size_t TempSeverity(float v)
+{
+    if (v >= 18.f && v <= 24.f) return 0;
+    if (v >= 15.f && v <= 28.f) return 1;
+    if (v >= 10.f && v <= 32.f) return 2;
+    return 3;
+}
 
 constexpr int32_t kPm25FontSize = 96;
 
 struct Ui::Impl {
+    struct SecondaryPanel {
+        lv_obj_t* row{};
+        lv_obj_t* value_label{};
+        size_t last_severity{SIZE_MAX};
+    };
+
     lv_font_t* big_font{};
     lv_obj_t* scr{};
     lv_obj_t* pm25_label{};
     lv_obj_t* pm25_name{};
-    lv_obj_t* pm1_label{};
-    lv_obj_t* pm4_label{};
-    lv_obj_t* pm10_label{};
-    lv_obj_t* temp_label{};
+    SecondaryPanel pm1{};
+    SecondaryPanel pm4{};
+    SecondaryPanel pm10{};
+    SecondaryPanel temp{};
     lv_obj_t* status_label{};
-    size_t last_severity{SIZE_MAX};  // sentinel forces first update to set bg color
+    size_t last_pm25_severity{SIZE_MAX};
 
-    // Creates a row: value (left, Montserrat 20) | name (right, Montserrat 14 muted)
-    static lv_obj_t* MakeSecondaryRow(lv_obj_t* parent, const char* name)
+    static SecondaryPanel MakeSecondaryRow(lv_obj_t* parent, const char* name)
     {
-        auto* row = lv_obj_create(parent);
-        lv_obj_remove_style_all(row);
-        lv_obj_set_width(row, LV_PCT(100));
-        lv_obj_set_height(row, LV_SIZE_CONTENT);
-        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                              LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+        SecondaryPanel panel;
 
-        auto* val_lbl = lv_label_create(row);
-        lv_label_set_text(val_lbl, "--");
-        lv_obj_set_style_text_font(val_lbl, &lv_font_montserrat_20, 0);
-        lv_obj_set_style_text_color(val_lbl, lv_color_white(), 0);
+        panel.row = lv_obj_create(parent);
+        lv_obj_remove_style_all(panel.row);
+        lv_obj_set_size(panel.row, LV_PCT(100), LV_PCT(100));
+        lv_obj_set_flex_grow(panel.row, 1);
+        lv_obj_set_flex_flow(panel.row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(panel.row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_bg_opa(panel.row, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(panel.row, kSeverityColors[0], 0);
+        lv_obj_set_style_radius(panel.row, 4, 0);
+        lv_obj_set_style_pad_hor(panel.row, 4, 0);
+        lv_obj_set_style_pad_ver(panel.row, 2, 0);
 
-        auto* name_lbl = lv_label_create(row);
+        panel.value_label = lv_label_create(panel.row);
+        lv_label_set_text(panel.value_label, "--");
+        lv_obj_set_style_text_font(panel.value_label, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(panel.value_label, lv_color_white(), 0);
+
+        auto* name_lbl = lv_label_create(panel.row);
         lv_label_set_text(name_lbl, name);
         lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_14, 0);
         lv_obj_set_style_text_color(name_lbl, lv_color_white(), 0);
         lv_obj_set_style_text_opa(name_lbl, LV_OPA_70, 0);
 
-        return val_lbl;
+        return panel;
+    }
+
+    static void UpdatePanel(SecondaryPanel& p, float val, const char* fmt,
+                            size_t (*severity_fn)(float))
+    {
+        SetLabel(p.value_label, fmt, val);
+        auto level = severity_fn(val);
+        if (level != p.last_severity) {
+            lv_obj_set_style_bg_color(p.row, kSeverityColors[level], 0);
+            p.last_severity = level;
+        }
     }
 };
 
 Ui::Ui() : impl_(std::make_unique<Impl>())
 {
-    impl_->big_font = lv_tiny_ttf_create_data(montserrat_bold_digits_ttf,
-                                               montserrat_bold_digits_ttf_len,
-                                               kPm25FontSize);
+    impl_->big_font = lv_tiny_ttf_create_data_ex(montserrat_bold_digits_ttf,
+                                                  montserrat_bold_digits_ttf_len,
+                                                  kPm25FontSize,
+                                                  LV_FONT_KERNING_NORMAL, 16);
 
     impl_->scr = lv_screen_active();
     lv_obj_set_style_bg_color(impl_->scr, kSeverityColors[0], 0);
@@ -81,7 +138,6 @@ Ui::Ui() : impl_(std::make_unique<Impl>())
     lv_obj_set_style_pad_all(impl_->scr, 4, 0);
     lv_obj_clear_flag(impl_->scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Grid: left column stretches, right column fixed to fit "999 PM10"
     static const int32_t col_dsc[] = {LV_GRID_FR(1), 80, LV_GRID_TEMPLATE_LAST};
     static const int32_t row_dsc[] = {LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};
     lv_obj_set_layout(impl_->scr, LV_LAYOUT_GRID);
@@ -107,7 +163,7 @@ Ui::Ui() : impl_(std::make_unique<Impl>())
     lv_obj_set_style_text_opa(impl_->pm25_name, LV_OPA_70, 0);
     lv_obj_align(impl_->pm25_name, LV_ALIGN_BOTTOM_LEFT, 2, -2);
 
-    // Right cell: compact secondary readings
+    // Right cell: compact secondary readings with per-metric severity colors
     auto* right = lv_obj_create(impl_->scr);
     lv_obj_remove_style_all(right);
     lv_obj_set_grid_cell(right, LV_GRID_ALIGN_END, 1, 1,
@@ -115,13 +171,13 @@ Ui::Ui() : impl_(std::make_unique<Impl>())
     lv_obj_set_flex_flow(right, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(right, LV_FLEX_ALIGN_SPACE_EVENLY,
                           LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
-    lv_obj_set_style_pad_row(right, 2, 0);
+    lv_obj_set_style_pad_row(right, 1, 0);
     lv_obj_set_width(right, 80);
 
-    impl_->pm1_label  = Impl::MakeSecondaryRow(right, "PM1");
-    impl_->pm4_label  = Impl::MakeSecondaryRow(right, "PM4");
-    impl_->pm10_label = Impl::MakeSecondaryRow(right, "PM10");
-    impl_->temp_label = Impl::MakeSecondaryRow(right, "\xC2\xB0""C");
+    impl_->pm1  = Impl::MakeSecondaryRow(right, "PM1");
+    impl_->pm4  = Impl::MakeSecondaryRow(right, "PM4");
+    impl_->pm10 = Impl::MakeSecondaryRow(right, "PM10");
+    impl_->temp = Impl::MakeSecondaryRow(right, "\xC2\xB0""C");
 
     // Status — bottom-left of screen, outside grid
     impl_->status_label = lv_label_create(impl_->scr);
@@ -148,15 +204,15 @@ Ui::~Ui()
 void Ui::UpdateMeasurements(const Sen55::Measurement& data)
 {
     SetLabel(impl_->pm25_label, "%.1f", data.pm2_5);
-    SetLabel(impl_->pm1_label,  "%.0f", data.pm1_0);
-    SetLabel(impl_->pm4_label,  "%.0f", data.pm4_0);
-    SetLabel(impl_->pm10_label, "%.0f", data.pm10);
-    SetLabel(impl_->temp_label, "%.0f", data.temperature);
+    Impl::UpdatePanel(impl_->pm1,  data.pm1_0,       "%.0f", Pm1Severity);
+    Impl::UpdatePanel(impl_->pm4,  data.pm4_0,       "%.0f", Pm4Severity);
+    Impl::UpdatePanel(impl_->pm10, data.pm10,         "%.0f", Pm10Severity);
+    Impl::UpdatePanel(impl_->temp, data.temperature,  "%.0f", TempSeverity);
 
     auto level = Pm25Severity(data.pm2_5);
-    if (level != impl_->last_severity) {
+    if (level != impl_->last_pm25_severity) {
         lv_obj_set_style_bg_color(impl_->scr, kSeverityColors[level], 0);
-        impl_->last_severity = level;
+        impl_->last_pm25_severity = level;
     }
 }
 
