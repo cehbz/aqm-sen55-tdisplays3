@@ -6,11 +6,13 @@
 #include "mqtt.hpp"
 #include "ha_discovery.hpp"
 
+#include "credentials.h"
+
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
+#include "esp_netif_sntp.h"
 #include "driver/i2c_master.h"
 
-#include <cassert>
 #include <cstdio>
 #include <ctime>
 
@@ -81,7 +83,10 @@ extern "C" void app_main()
         ui = &ui_obj;
         lvgl_port_unlock();
     }
-    assert(ui && "LVGL port lock failed during UI init");
+    if (!ui) {
+        ESP_LOGE(TAG, "LVGL port lock failed during UI init");
+        abort();
+    }
 
     static auto sensor = Sen55(sen55_bus, [](const Sen55::Measurement &m) {
         auto now = std::time(nullptr);
@@ -103,6 +108,16 @@ extern "C" void app_main()
     wifi_init();
     if (wifi_wait_connected(15000)) {
         ESP_LOGI(TAG, "WiFi connected");
+
+        setenv("TZ", TIMEZONE, 1);
+        tzset();
+        esp_sntp_config_t sntp_cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+        esp_err_t sntp_err = esp_netif_sntp_init(&sntp_cfg);
+        if (sntp_err == ESP_OK) {
+            ESP_LOGI(TAG, "SNTP started, TZ=%s", TIMEZONE);
+        } else {
+            ESP_LOGE(TAG, "SNTP init failed: %s", esp_err_to_name(sntp_err));
+        }
     } else {
         ESP_LOGW(TAG, "WiFi not connected yet — will auto-reconnect");
     }

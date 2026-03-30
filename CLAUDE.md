@@ -50,13 +50,14 @@ idf.py -p /dev/cu.usbmodem* flash monitor
 main/
   main.cpp              – app_main: display + sensor + WiFi + MQTT + SEN55 publishing
   tdisplay_s3.hpp/cpp   – Board-specific ST7789V i80 LCD + LVGL port init (landscape)
-  ui.hpp/cpp            – Ui class: PM2.5 display with severity-colored background
+  ui.hpp/cpp            – Ui class: PM2.5 + secondary readings, severity-colored background
+  montserrat_bold_digits.{h,c,ttf} – Montserrat Bold subset (digits only), rendered at runtime via lv_tiny_ttf
   sen55.hpp/cpp         – Sen55 class: self-managing sensor (pimpl, owns polling task)
   device_id.hpp/cpp     – MAC-derived unique device ID
   wifi.hpp/cpp          – WiFi STA with auto-reconnect
   mqtt.hpp/cpp          – esp-mqtt client, LWT, publish/subscribe
   ha_discovery.hpp/cpp  – HA MQTT Discovery payloads for SEN55 (8 entities)
-  credentials.h.template – WiFi SSID/pass, MQTT broker URI (copy to credentials.h)
+  credentials.h.template – WiFi SSID/pass, MQTT broker URI, TZ (copy to credentials.h)
 ```
 
 ### Sensor
@@ -65,7 +66,20 @@ Sen55 is a self-managing domain object. Construction starts measurement and spaw
 
 ### Display (tdisplay_s3)
 
-Board-specific init for the T-Display S3's ST7789V panel via i80 interface. Configures the 8-bit parallel bus, creates the panel driver, rotates to landscape (swap_xy + mirror), and registers with `esp_lvgl_port`. Uses DMA-backed double buffers in internal SRAM.
+Board-specific init for the T-Display S3's ST7789V panel via i80 interface. Configures the 8-bit parallel bus, creates the panel driver, and registers with `esp_lvgl_port`. Uses DMA-backed double buffers in internal SRAM.
+
+**Critical notes:**
+- GPIO 9 (RD) must be driven HIGH before any i80 operations, or the ST7789V drives the data bus causing contention
+- Landscape rotation must be set via `lvgl_port_display_cfg_t.rotation`, NOT directly on the panel — `lvgl_port_add_disp` overwrites manual `esp_lcd_panel_swap_xy`/`esp_lcd_panel_mirror` calls
+- Gap offset `(0, 35)` for landscape; `(35, 0)` for portrait
+
+### UI
+
+Split landscape layout: PM2.5 in 96px Montserrat Bold on the left (~75% of width), secondary readings (PM1, PM4, PM10, temp) stacked on the right in a fixed 80px column. Background color changes with PM2.5 AQI severity. PM2.5 font rendered at runtime via `lv_tiny_ttf` from a subset TTF (digits + `.` + `-` only, ~4KB). Font size is a constant (`kPm25FontSize`) — change it and rebuild to resize.
+
+### NTP
+
+SNTP syncs from `pool.ntp.org` after WiFi connects. Timezone is a POSIX TZ string in `credentials.h`.
 
 ### Dependencies (managed via idf_component.yml)
 
