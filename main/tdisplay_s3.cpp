@@ -131,7 +131,7 @@ esp_err_t Init()
         .double_buffer = true,
         .hres = kHRes,
         .vres = kVRes,
-        .rotation = {
+        .rotation = { // landscape, origin top-left, X rightward, Y downward, usb port on left
             .swap_xy = true,
             .mirror_x = false,
             .mirror_y = true,

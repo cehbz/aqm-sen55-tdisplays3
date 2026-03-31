@@ -1,15 +1,15 @@
 #include "ui.hpp"
-#include "montserrat_bold_digits.h"
 
 #include "lvgl.h"
 
 #include <cstdio>
 
-static void SetLabel(lv_obj_t* label, const char* fmt, float val)
+LV_FONT_DECLARE(montserrat_bold_digits);
+
+static void SetLabel(lv_obj_t* label, char* buf, size_t buf_len, const char* fmt, float val)
 {
-    char buf[16];
-    std::snprintf(buf, sizeof(buf), fmt, val);
-    lv_label_set_text(label, buf);
+    std::snprintf(buf, buf_len, fmt, val);
+    lv_label_set_text_static(label, buf);
 }
 
 static constexpr size_t kSeverityCount = 4;
@@ -21,39 +21,22 @@ static const lv_color_t kSeverityColors[kSeverityCount] = {
     lv_color_hex(0xE0263C),  // unhealthy — crimson (hue ~353°)
 };
 
-static size_t Pm25Severity(float v)
+struct Thresholds { float good; float moderate; float usg; };
+
+static size_t PmSeverity(float v, const Thresholds& t)
 {
-    if (v <= 12.f)  return 0;
-    if (v <= 35.4f) return 1;
-    if (v <= 55.4f) return 2;
+    if (v <= t.good)     return 0;
+    if (v <= t.moderate) return 1;
+    if (v <= t.usg)      return 2;
     return 3;
 }
 
-static size_t Pm1Severity(float v)
-{
-    if (v <= 12.f)  return 0;
-    if (v <= 35.f)  return 1;
-    if (v <= 55.f)  return 2;
-    return 3;
-}
+static constexpr Thresholds kPm25Thresholds = {12.f, 35.4f, 55.4f};
+static constexpr Thresholds kPm1Thresholds  = {12.f, 35.f,  55.f};
+static constexpr Thresholds kPm4Thresholds  = {25.f, 50.f,  75.f};
+static constexpr Thresholds kPm10Thresholds = {54.f, 154.f, 254.f};
 
-static size_t Pm4Severity(float v)
-{
-    if (v <= 25.f)  return 0;
-    if (v <= 50.f)  return 1;
-    if (v <= 75.f)  return 2;
-    return 3;
-}
-
-static size_t Pm10Severity(float v)
-{
-    if (v <= 54.f)  return 0;
-    if (v <= 154.f) return 1;
-    if (v <= 254.f) return 2;
-    return 3;
-}
-
-// Comfort range — centered thresholds
+// Comfort range — two-sided, can't use threshold ladder
 static size_t TempSeverity(float v)
 {
     if (v >= 18.f && v <= 24.f) return 0;
@@ -62,18 +45,19 @@ static size_t TempSeverity(float v)
     return 3;
 }
 
-constexpr int32_t kPm25FontSize = 96;
-
 struct Ui::Impl {
+    static constexpr size_t kBufLen = 16;
+
     struct SecondaryPanel {
         lv_obj_t* row{};
         lv_obj_t* value_label{};
+        char buf[kBufLen]{};
         size_t last_severity{SIZE_MAX};
     };
 
-    lv_font_t* big_font{};
     lv_obj_t* scr{};
     lv_obj_t* pm25_label{};
+    char pm25_buf[kBufLen]{};
     lv_obj_t* pm25_name{};
     SecondaryPanel pm1{};
     SecondaryPanel pm4{};
@@ -114,10 +98,20 @@ struct Ui::Impl {
     }
 
     static void UpdatePanel(SecondaryPanel& p, float val, const char* fmt,
-                            size_t (*severity_fn)(float))
+                            const Thresholds& thresholds)
     {
-        SetLabel(p.value_label, fmt, val);
-        auto level = severity_fn(val);
+        SetLabel(p.value_label, p.buf, kBufLen, fmt, val);
+        auto level = PmSeverity(val, thresholds);
+        if (level != p.last_severity) {
+            lv_obj_set_style_bg_color(p.row, kSeverityColors[level], 0);
+            p.last_severity = level;
+        }
+    }
+
+    static void UpdateTempPanel(SecondaryPanel& p, float val)
+    {
+        SetLabel(p.value_label, p.buf, kBufLen, "%.0f", val);
+        auto level = TempSeverity(val);
         if (level != p.last_severity) {
             lv_obj_set_style_bg_color(p.row, kSeverityColors[level], 0);
             p.last_severity = level;
@@ -125,13 +119,10 @@ struct Ui::Impl {
     }
 };
 
-Ui::Ui() : impl_(std::make_unique<Impl>())
+Ui::Ui()
 {
-    impl_->big_font = lv_tiny_ttf_create_data_ex(montserrat_bold_digits_ttf,
-                                                  montserrat_bold_digits_ttf_len,
-                                                  kPm25FontSize,
-                                                  LV_FONT_KERNING_NORMAL, 16);
-
+    static Impl impl;
+    impl_ = &impl;
     impl_->scr = lv_screen_active();
     lv_obj_set_style_bg_color(impl_->scr, kSeverityColors[0], 0);
     lv_obj_set_style_bg_opa(impl_->scr, LV_OPA_COVER, 0);
@@ -152,7 +143,7 @@ Ui::Ui() : impl_(std::make_unique<Impl>())
 
     impl_->pm25_label = lv_label_create(left);
     lv_label_set_text(impl_->pm25_label, "--");
-    lv_obj_set_style_text_font(impl_->pm25_label, impl_->big_font, 0);
+    lv_obj_set_style_text_font(impl_->pm25_label, &montserrat_bold_digits, 0);
     lv_obj_set_style_text_color(impl_->pm25_label, lv_color_white(), 0);
     lv_obj_center(impl_->pm25_label);
 
@@ -194,30 +185,24 @@ Ui::Ui() : impl_(std::make_unique<Impl>())
     lv_obj_invalidate(impl_->scr);
 }
 
-Ui::~Ui()
-{
-    if (impl_->big_font) {
-        lv_tiny_ttf_destroy(impl_->big_font);
-    }
-}
+Ui::~Ui() {}  // impl_ points to static storage, nothing to free
 
 void Ui::UpdateMeasurements(const Sen55::Measurement& data)
 {
-    SetLabel(impl_->pm25_label, "%.1f", data.pm2_5);
-    Impl::UpdatePanel(impl_->pm1,  data.pm1_0,       "%.0f", Pm1Severity);
-    Impl::UpdatePanel(impl_->pm4,  data.pm4_0,       "%.0f", Pm4Severity);
-    Impl::UpdatePanel(impl_->pm10, data.pm10,         "%.0f", Pm10Severity);
-    Impl::UpdatePanel(impl_->temp, data.temperature,  "%.0f", TempSeverity);
+    SetLabel(impl_->pm25_label, impl_->pm25_buf, Impl::kBufLen, "%.1f", data.pm2_5);
+    Impl::UpdatePanel(impl_->pm1,  data.pm1_0, "%.0f", kPm1Thresholds);
+    Impl::UpdatePanel(impl_->pm4,  data.pm4_0, "%.0f", kPm4Thresholds);
+    Impl::UpdatePanel(impl_->pm10, data.pm10,  "%.0f", kPm10Thresholds);
+    Impl::UpdateTempPanel(impl_->temp, data.temperature);
 
-    auto level = Pm25Severity(data.pm2_5);
+    auto level = PmSeverity(data.pm2_5, kPm25Thresholds);
     if (level != impl_->last_pm25_severity) {
         lv_obj_set_style_bg_color(impl_->scr, kSeverityColors[level], 0);
         impl_->last_pm25_severity = level;
     }
 }
 
-void Ui::SetStatus(std::string_view text)
+void Ui::SetStatus(const char* text)
 {
-    lv_label_set_text_fmt(impl_->status_label, "%.*s",
-                          static_cast<int>(text.size()), text.data());
+    lv_label_set_text(impl_->status_label, text);
 }

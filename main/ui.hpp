@@ -2,9 +2,6 @@
 
 #include "sen55.hpp"
 
-#include <memory>
-#include <string_view>
-
 class Ui {
 public:
     Ui();
@@ -16,9 +13,9 @@ public:
     Ui& operator=(Ui&&) = delete;
 
     void UpdateMeasurements(const Sen55::Measurement& data);
-    void SetStatus(std::string_view text);
+    void SetStatus(const char* text);
 
 private:
     struct Impl;
-    std::unique_ptr<Impl> impl_;
+    Impl* impl_;
 };
